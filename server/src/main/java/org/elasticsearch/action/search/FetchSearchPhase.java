@@ -95,6 +95,23 @@ class FetchSearchPhase extends SearchPhase {
         long phaseStartTimeInNanos = System.nanoTime();
         // depending on whether we executed the RankFeaturePhase we may or may not have the reduced query result computed already
         final var reducedQueryPhase = this.reducedQueryPhase == null ? resultConsumer.reduce() : this.reducedQueryPhase;
+
+        // Check if any terms aggregation needs TPUT refinement (mode=EXACT)
+        if (reducedQueryPhase.aggregations() != null) {
+            var refinementTargets = org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementCoordinator.findRefinementTargets(
+                reducedQueryPhase.aggregations()
+            );
+            if (refinementTargets.isEmpty() == false) {
+                // Delegate to AggregationRefinementPhase, which will call back to FetchSearchPhase
+                // with the refined ReducedQueryPhase after Phase 2 completes
+                context.executeNextPhase(
+                    NAME,
+                    () -> new AggregationRefinementPhase(context, resultConsumer != null ? resultConsumer : new ArraySearchPhaseResults<>(context.getNumShards()), reducedQueryPhase, aggregatedDfs, refinementTargets)
+                );
+                return;
+            }
+        }
+
         final int numShards = context.getNumShards();
         // Usually when there is a single shard, we force the search type QUERY_THEN_FETCH. But when there's kNN, we might
         // still use DFS_QUERY_THEN_FETCH, which does not perform the "query and fetch" optimization during the query phase.

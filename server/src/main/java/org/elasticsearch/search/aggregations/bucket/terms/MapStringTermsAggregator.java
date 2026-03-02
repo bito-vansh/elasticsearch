@@ -563,7 +563,7 @@ public final class MapStringTermsAggregator extends AbstractStringTermsAggregato
             } else {
                 reduceOrder = order;
             }
-            return new StringTerms(
+            StringTerms result = new StringTerms(
                 name,
                 reduceOrder,
                 order,
@@ -577,6 +577,8 @@ public final class MapStringTermsAggregator extends AbstractStringTermsAggregato
                 Arrays.asList(topBuckets),
                 null
             );
+            result.setMode(mode);
+            return result;
         }
 
         @Override

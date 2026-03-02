@@ -1011,6 +1011,58 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         }, wrapFailureListener(listener, readerContext, markAsUsed));
     }
 
+    /**
+     * Executes TPUT Phase 2 terms refinement on a shard. Re-executes the query
+     * with a modified terms aggregation that collects all terms above the
+     * given threshold.
+     */
+    public void executeTermsRefinement(
+        org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardRequest request,
+        SearchShardTask task,
+        ActionListener<org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardResponse> listener
+    ) {
+        final IndexShard shard = getShard(request.shardSearchRequest());
+        final Executor executor = getExecutor(shard);
+        runAsync(executor, () -> {
+            // Create a modified search source with threshold-based aggregation
+            var refinedSource = org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementService.createRefinementSource(
+                request.shardSearchRequest().source(),
+                request.aggregationName(),
+                request.threshold()
+            );
+            // Clone the shard search request with the modified source
+            ShardSearchRequest refinedRequest = new ShardSearchRequest(request.shardSearchRequest());
+            refinedRequest.source(refinedSource);
+
+            final ReaderContext readerContext = createOrGetReaderContext(refinedRequest);
+            try (
+                Releasable ignored = readerContext.markAsUsed(getKeepAlive(refinedRequest));
+                SearchContext context = createContext(readerContext, refinedRequest, task, ResultsType.QUERY, true)
+            ) {
+                loadOrExecuteQueryPhase(refinedRequest, context);
+                // Extract aggregation results
+                var queryResult = context.queryResult();
+                var aggs = queryResult.aggregations() != null
+                    ? queryResult.aggregations().expand()
+                    : org.elasticsearch.search.aggregations.InternalAggregations.EMPTY;
+                int totalTerms = 0;
+                var termsAgg = aggs.get(request.aggregationName());
+                if (termsAgg instanceof org.elasticsearch.search.aggregations.bucket.terms.AbstractInternalTerms<?, ?> terms) {
+                    totalTerms = terms.getBuckets().size();
+                }
+                return new org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardResponse(
+                    request.shardId(),
+                    aggs,
+                    totalTerms
+                );
+            } catch (Exception e) {
+                logger.trace("Terms refinement phase failed", e);
+                processFailure(readerContext, e);
+                throw e;
+            }
+        }, listener);
+    }
+
     private QueryFetchSearchResult executeFetchPhase(ReaderContext reader, SearchContext context, long afterQueryTime) {
         var opsListener = context.indexShard().getSearchOperationListener();
         try (Releasable scope = tracer.withScope(context.getTask());) {

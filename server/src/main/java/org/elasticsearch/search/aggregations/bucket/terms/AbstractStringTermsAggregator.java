@@ -42,7 +42,7 @@ abstract class AbstractStringTermsAggregator extends TermsAggregator {
     }
 
     protected StringTerms buildEmptyTermsAggregation() {
-        return new StringTerms(
+        StringTerms result = new StringTerms(
             name,
             order,
             order,
@@ -56,6 +56,8 @@ abstract class AbstractStringTermsAggregator extends TermsAggregator {
             emptyList(),
             0L
         );
+        result.setMode(mode);
+        return result;
     }
 
     protected SignificantStringTerms buildEmptySignificantTermsAggregation(

@@ -931,7 +931,7 @@ public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggr
             } else {
                 reduceOrder = order;
             }
-            return new StringTerms(
+            StringTerms result = new StringTerms(
                 name,
                 reduceOrder,
                 order,
@@ -945,6 +945,8 @@ public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggr
                 Arrays.asList(topBuckets),
                 null
             );
+            result.setMode(mode);
+            return result;
         }
 
         @Override

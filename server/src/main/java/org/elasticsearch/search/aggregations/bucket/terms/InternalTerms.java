@@ -8,6 +8,7 @@
  */
 package org.elasticsearch.search.aggregations.bucket.terms;
 
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.DocValueFormat;
@@ -171,6 +172,8 @@ public abstract class InternalTerms<A extends InternalTerms<A, B>, B extends Int
         this.minDocCount = minDocCount;
     }
 
+    static final TransportVersion EXACT_TERMS_MODE = TermsAggregationBuilder.EXACT_TERMS_MODE;
+
     /**
      * Read from a stream.
      */
@@ -180,6 +183,9 @@ public abstract class InternalTerms<A extends InternalTerms<A, B>, B extends Int
         order = InternalOrder.Streams.readOrder(in);
         requiredSize = readSize(in);
         minDocCount = in.readVLong();
+        if (in.getTransportVersion().supports(EXACT_TERMS_MODE)) {
+            mode = TermsAggregationMode.readFromStream(in);
+        }
     }
 
     @Override
@@ -188,6 +194,9 @@ public abstract class InternalTerms<A extends InternalTerms<A, B>, B extends Int
         order.writeTo(out);
         writeSize(requiredSize, out);
         out.writeVLong(minDocCount);
+        if (out.getTransportVersion().supports(EXACT_TERMS_MODE)) {
+            getMode().writeTo(out);
+        }
         writeTermTypeInfoTo(out);
     }
 

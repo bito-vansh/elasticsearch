@@ -233,6 +233,7 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
     private final TermsAggregator.BucketCountThresholds bucketCountThresholds;
     private final boolean showTermDocCountError;
     private final boolean excludeDeletedDocs;
+    private final TermsAggregationMode mode;
 
     TermsAggregatorFactory(
         String name,
@@ -248,7 +249,8 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
         AggregatorFactories.Builder subFactoriesBuilder,
         Map<String, Object> metadata,
         TermsAggregatorSupplier aggregatorSupplier,
-        boolean excludeDeletedDocs
+        boolean excludeDeletedDocs,
+        TermsAggregationMode mode
     ) throws IOException {
         super(name, config, context, parent, subFactoriesBuilder, metadata);
         this.aggregatorSupplier = aggregatorSupplier;
@@ -259,6 +261,7 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
         this.bucketCountThresholds = bucketCountThresholds;
         this.showTermDocCountError = showTermDocCountError;
         this.excludeDeletedDocs = excludeDeletedDocs;
+        this.mode = mode;
     }
 
     @Override
@@ -324,7 +327,11 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
             }
         }
 
-        return aggregatorSupplier.build(
+        // When in exact mode, force doc count error tracking so the reducer
+        // has the data needed to detect whether refinement is necessary.
+        boolean effectiveShowError = showTermDocCountError || (mode == TermsAggregationMode.EXACT);
+
+        Aggregator agg = aggregatorSupplier.build(
             name,
             factories,
             config,
@@ -335,11 +342,16 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
             context,
             parent,
             collectMode,
-            showTermDocCountError,
+            effectiveShowError,
             cardinality,
             metadata,
             excludeDeletedDocs
         );
+        // Propagate mode to the aggregator so shard-side InternalTerms carry it
+        if (agg instanceof TermsAggregator ta) {
+            ta.setMode(mode);
+        }
+        return agg;
     }
 
     /**
