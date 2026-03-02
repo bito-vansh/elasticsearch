@@ -15,6 +15,7 @@ import org.elasticsearch.search.aggregations.BaseAggregationTestCase;
 import org.elasticsearch.search.aggregations.BucketOrder;
 import org.elasticsearch.search.aggregations.bucket.terms.IncludeExclude;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
+import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationMode;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregatorFactory.ExecutionMode;
 
 import java.util.ArrayList;
@@ -142,6 +143,9 @@ public class TermsTests extends BaseAggregationTestCase<TermsAggregationBuilder>
         }
         if (randomBoolean()) {
             factory.showTermDocCountError(randomBoolean());
+        }
+        if (randomBoolean()) {
+            factory.mode(randomFrom(TermsAggregationMode.values()));
         }
         return factory;
     }
