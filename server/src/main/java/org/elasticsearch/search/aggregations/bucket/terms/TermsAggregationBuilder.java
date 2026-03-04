@@ -137,6 +137,7 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
         this.collectMode = clone.collectMode;
         this.bucketCountThresholds = new BucketCountThresholds(clone.bucketCountThresholds);
         this.showTermDocCountError = clone.showTermDocCountError;
+        this.excludeDeletedDocs = clone.excludeDeletedDocs;
         this.mode = clone.mode;
     }
 

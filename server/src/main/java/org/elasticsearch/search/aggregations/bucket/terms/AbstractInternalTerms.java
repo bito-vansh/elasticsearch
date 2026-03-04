@@ -47,6 +47,11 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
     extends InternalMultiBucketAggregation<A, B> {
 
     TermsAggregationMode mode = TermsAggregationMode.DEFAULT;
+
+    // Coordinator-local transient fields — set during the coordinator-side reduce
+    // (TermsAggregationReducer.get()) and consumed by TermsRefinementCoordinator.
+    // These are NEVER serialized over the wire; they only exist on the coordinator
+    // node after all shard results have been merged.
     private boolean needsRefinement = false;
     private long provisionalMinDocCount = -1;
     private int numShardsInReduce = -1;

@@ -85,17 +85,12 @@ class AggregationRefinementPhase extends SearchPhase {
     }
 
     private void innerRun() {
-        // For simplicity, handle one refinement target at a time.
-        // Multiple targets would be handled sequentially.
         if (targets.isEmpty()) {
             proceedToFetch(reducedQueryPhase);
             return;
         }
 
-        TermsRefinementCoordinator.RefinementTarget target = targets.get(0);
-        logger.debug("Starting TPUT Phase 2 refinement for [{}] with threshold [{}]", target.aggregationName(), target.threshold());
-
-        // Collect shard targets from the query results
+        // Collect active shard results once — shared across all targets
         AtomicArray<SearchPhaseResult> shardResults = queryResults.getAtomicArray();
         List<SearchPhaseResult> activeResults = new ArrayList<>();
         for (SearchPhaseResult result : shardResults.asList()) {
@@ -109,6 +104,35 @@ class AggregationRefinementPhase extends SearchPhase {
             return;
         }
 
+        // Process all refinement targets sequentially, threading the
+        // ReducedQueryPhase through each refinement so that each target's
+        // refined aggregations are visible to subsequent targets.
+        refineTarget(0, reducedQueryPhase, activeResults);
+    }
+
+    /**
+     * Refines the target at {@code targetIndex} and then chains to the next target.
+     * When all targets have been processed, proceeds to the fetch phase.
+     */
+    private void refineTarget(
+        int targetIndex,
+        SearchPhaseController.ReducedQueryPhase currentPhase,
+        List<SearchPhaseResult> activeResults
+    ) {
+        if (targetIndex >= targets.size()) {
+            proceedToFetch(currentPhase);
+            return;
+        }
+
+        TermsRefinementCoordinator.RefinementTarget target = targets.get(targetIndex);
+        logger.debug(
+            "Starting TPUT Phase 2 refinement for [{}] with threshold [{}] (target {}/{})",
+            target.aggregationName(),
+            target.threshold(),
+            targetIndex + 1,
+            targets.size()
+        );
+
         // Send refinement requests to all shards
         List<TermsRefinementShardResponse> responses = Collections.synchronizedList(new ArrayList<>());
         AtomicInteger remaining = new AtomicInteger(activeResults.size());
@@ -118,7 +142,7 @@ class AggregationRefinementPhase extends SearchPhase {
             ShardSearchRequest shardRequest = queryResult.getShardSearchRequest();
             if (shardRequest == null || shardRequest.source() == null) {
                 if (remaining.decrementAndGet() == 0) {
-                    onAllShardsResponded(target, responses);
+                    onAllShardsResponded(targetIndex, target, responses, currentPhase, activeResults);
                 }
                 continue;
             }
@@ -150,34 +174,41 @@ class AggregationRefinementPhase extends SearchPhase {
                                 response.totalTermsAboveThreshold()
                             );
                             if (remaining.decrementAndGet() == 0) {
-                                onAllShardsResponded(target, responses);
+                                onAllShardsResponded(targetIndex, target, responses, currentPhase, activeResults);
                             }
                         }
 
                         @Override
                         public void onFailure(Exception e) {
-                            logger.warn("Refinement request to shard [{}] failed", shardTarget.getShardId(), e);
+                            logger.debug("Refinement request to shard [{}] failed", shardTarget.getShardId(), e);
                             // Continue despite shard failures — fall back to Phase 1 results
                             if (remaining.decrementAndGet() == 0) {
-                                onAllShardsResponded(target, responses);
+                                onAllShardsResponded(targetIndex, target, responses, currentPhase, activeResults);
                             }
                         }
                     }
                 );
             } catch (Exception e) {
-                logger.warn("Failed to send refinement request to shard [{}]", shardTarget.getShardId(), e);
+                logger.debug("Failed to send refinement request to shard [{}]", shardTarget.getShardId(), e);
                 if (remaining.decrementAndGet() == 0) {
-                    onAllShardsResponded(target, responses);
+                    onAllShardsResponded(targetIndex, target, responses, currentPhase, activeResults);
                 }
             }
         }
     }
 
-    private void onAllShardsResponded(TermsRefinementCoordinator.RefinementTarget target, List<TermsRefinementShardResponse> responses) {
+    private void onAllShardsResponded(
+        int targetIndex,
+        TermsRefinementCoordinator.RefinementTarget target,
+        List<TermsRefinementShardResponse> responses,
+        SearchPhaseController.ReducedQueryPhase currentPhase,
+        List<SearchPhaseResult> activeResults
+    ) {
         try {
             if (responses.isEmpty()) {
-                logger.debug("No Phase 2 responses received; using Phase 1 results as-is");
-                proceedToFetch(reducedQueryPhase);
+                logger.debug("No Phase 2 responses received for [{}]; keeping Phase 1 results", target.aggregationName());
+                // Move on to the next target with the current phase unchanged
+                refineTarget(targetIndex + 1, currentPhase, activeResults);
                 return;
             }
 
@@ -186,35 +217,34 @@ class AggregationRefinementPhase extends SearchPhase {
             logger.debug("Phase 2 merge complete for [{}]", target.aggregationName());
 
             // Create a new ReducedQueryPhase with the refined aggregations
-            // replacing the terms aggregation from Phase 1
-            // For now, we use the Phase 2 aggregations directly since they contain
-            // the exact results for the refined terms aggregation
             SearchPhaseController.ReducedQueryPhase refined = new SearchPhaseController.ReducedQueryPhase(
-                reducedQueryPhase.totalHits(),
-                reducedQueryPhase.fetchHits(),
-                reducedQueryPhase.maxScore(),
-                reducedQueryPhase.timedOut(),
-                reducedQueryPhase.terminatedEarly(),
-                reducedQueryPhase.suggest(),
+                currentPhase.totalHits(),
+                currentPhase.fetchHits(),
+                currentPhase.maxScore(),
+                currentPhase.timedOut(),
+                currentPhase.terminatedEarly(),
+                currentPhase.suggest(),
                 refinedAggs,
-                reducedQueryPhase.profileBuilder(),
-                reducedQueryPhase.sortedTopDocs(),
-                reducedQueryPhase.sortValueFormats(),
-                reducedQueryPhase.queryPhaseRankCoordinatorContext(),
-                reducedQueryPhase.numReducePhases(),
-                reducedQueryPhase.size(),
-                reducedQueryPhase.from(),
-                reducedQueryPhase.isEmptyResult(),
-                reducedQueryPhase.timeRangeFilterFromMillis()
+                currentPhase.profileBuilder(),
+                currentPhase.sortedTopDocs(),
+                currentPhase.sortValueFormats(),
+                currentPhase.queryPhaseRankCoordinatorContext(),
+                currentPhase.numReducePhases(),
+                currentPhase.size(),
+                currentPhase.from(),
+                currentPhase.isEmptyResult(),
+                currentPhase.timeRangeFilterFromMillis()
             );
 
-            proceedToFetch(refined);
+            // Chain to the next target with the updated phase
+            refineTarget(targetIndex + 1, refined, activeResults);
         } catch (Exception e) {
-            context.onPhaseFailure(NAME, "Failed to merge Phase 2 results", e);
+            context.onPhaseFailure(NAME, "Failed to merge Phase 2 results for [" + target.aggregationName() + "]", e);
         }
     }
 
-    private void proceedToFetch(SearchPhaseController.ReducedQueryPhase phase) {
+    // package-private for testing
+    void proceedToFetch(SearchPhaseController.ReducedQueryPhase phase) {
         context.executeNextPhase(
             NAME,
             () -> new FetchSearchPhase(queryResults, aggregatedDfs, context, phase)
