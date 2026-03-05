@@ -35,7 +35,10 @@ public final class TermsRefinementCoordinator {
     private TermsRefinementCoordinator() {}
 
     /**
-     * Checks if any terms aggregation in the reduced results needs TPUT refinement.
+     * Checks if any top-level terms aggregation in the reduced results needs TPUT refinement.
+     * <p>
+     * Note: only top-level aggregations are scanned. Nested terms aggregations (sub-aggregations)
+     * with {@code mode=EXACT} are not currently detected and will not trigger refinement.
      */
     public static List<RefinementTarget> findRefinementTargets(InternalAggregations aggregations) {
         List<RefinementTarget> targets = new ArrayList<>();

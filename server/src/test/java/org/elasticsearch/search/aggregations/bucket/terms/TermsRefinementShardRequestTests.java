@@ -103,6 +103,58 @@ public class TermsRefinementShardRequestTests extends ESTestCase {
         assertThat(request.aggregationName(), equalTo("color_terms"));
         assertThat(request.threshold(), equalTo(99L));
         assertNotNull(request.shardSearchRequest());
+        assertNull(request.termsToResolve());
+    }
+
+    public void testPhase3WithTermsToResolve() throws IOException {
+        OriginalIndices originalIndices = new OriginalIndices(new String[] { "test-index" }, IndicesOptions.strictExpandOpen());
+        ShardId shardId = new ShardId("test-index", "_na_", 0);
+        ShardSearchRequest shardSearchRequest = createShardSearchRequest(originalIndices, shardId);
+
+        List<String> termsToResolve = List.of("red", "blue", "green");
+        TermsRefinementShardRequest request = new TermsRefinementShardRequest(
+            originalIndices,
+            shardId,
+            shardSearchRequest,
+            "my_terms",
+            1,
+            termsToResolve
+        );
+
+        assertThat(request.termsToResolve(), equalTo(termsToResolve));
+
+        // Verify serialization round-trip preserves termsToResolve
+        BytesStreamOutput out = new BytesStreamOutput();
+        request.writeTo(out);
+        StreamInput in = new NamedWriteableAwareStreamInput(out.bytes().streamInput(), registry);
+        TermsRefinementShardRequest deserialized = new TermsRefinementShardRequest(in);
+
+        assertThat(deserialized.termsToResolve(), equalTo(termsToResolve));
+        assertThat(deserialized.aggregationName(), equalTo("my_terms"));
+    }
+
+    public void testPhase2WithNullTermsToResolve() throws IOException {
+        OriginalIndices originalIndices = new OriginalIndices(new String[] { "test-index" }, IndicesOptions.strictExpandOpen());
+        ShardId shardId = new ShardId("test-index", "_na_", 0);
+        ShardSearchRequest shardSearchRequest = createShardSearchRequest(originalIndices, shardId);
+
+        TermsRefinementShardRequest request = new TermsRefinementShardRequest(
+            originalIndices,
+            shardId,
+            shardSearchRequest,
+            "my_terms",
+            42
+        );
+
+        assertNull(request.termsToResolve());
+
+        // Verify serialization round-trip preserves null
+        BytesStreamOutput out = new BytesStreamOutput();
+        request.writeTo(out);
+        StreamInput in = new NamedWriteableAwareStreamInput(out.bytes().streamInput(), registry);
+        TermsRefinementShardRequest deserialized = new TermsRefinementShardRequest(in);
+
+        assertNull(deserialized.termsToResolve());
     }
 
     private ShardSearchRequest createShardSearchRequest(OriginalIndices originalIndices, ShardId shardId) {

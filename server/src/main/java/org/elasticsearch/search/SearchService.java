@@ -1024,12 +1024,18 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         final IndexShard shard = getShard(request.shardSearchRequest());
         final Executor executor = getExecutor(shard);
         runAsync(executor, () -> {
-            // Create a modified search source with threshold-based aggregation
-            var refinedSource = org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementService.createRefinementSource(
-                request.shardSearchRequest().source(),
-                request.aggregationName(),
-                request.threshold()
-            );
+            // Create a modified search source: Phase 2 (threshold-based) or Phase 3 (gap resolution)
+            var refinedSource = request.termsToResolve() != null
+                ? org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementService.createGapResolutionSource(
+                    request.shardSearchRequest().source(),
+                    request.aggregationName(),
+                    request.termsToResolve()
+                )
+                : org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementService.createRefinementSource(
+                    request.shardSearchRequest().source(),
+                    request.aggregationName(),
+                    request.threshold()
+                );
             // Clone the shard search request with the modified source
             ShardSearchRequest refinedRequest = new ShardSearchRequest(request.shardSearchRequest());
             refinedRequest.source(refinedSource);

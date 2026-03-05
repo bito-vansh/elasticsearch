@@ -8,14 +8,21 @@
  */
 package org.elasticsearch.search.aggregations.bucket.terms;
 
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
+import org.elasticsearch.search.aggregations.AggregationReduceContext;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Service that handles TPUT Phase 2/3 refinement logic.
@@ -85,34 +92,158 @@ public final class TermsRefinementService {
     }
 
     /**
-     * Merges Phase 2 refinement results from all shards.
-     * The Phase 2 results contain exact counts because every shard reported
-     * every term above threshold T (by TPUT guarantee).
+     * Creates a modified SearchSourceBuilder for Phase 3 gap resolution.
+     * The terms aggregation is modified to use an include filter for only the
+     * specific terms that need gap resolution on this shard.
      *
-     * @param phase2Results List of per-shard refinement results from Phase 2
-     * @param aggregationName The name of the terms aggregation
-     * @return The merged aggregation results with exact counts
+     * @param original The original search source from Phase 1
+     * @param aggregationName The name of the terms aggregation to refine
+     * @param termsToResolve The specific term keys to query for gap resolution
+     * @return A new SearchSourceBuilder configured for Phase 3
      */
-    public static InternalAggregations mergeRefinementResults(
-        List<TermsRefinementShardResponse> phase2Results,
-        String aggregationName
+    public static SearchSourceBuilder createGapResolutionSource(
+        SearchSourceBuilder original,
+        String aggregationName,
+        List<String> termsToResolve
     ) {
-        // Collect all Phase 2 terms aggregations for reduction
-        List<InternalAggregation> termsToReduce = new ArrayList<>();
-        for (TermsRefinementShardResponse response : phase2Results) {
+        AggregatorFactories.Builder aggBuilder = original.aggregations();
+        if (aggBuilder == null) {
+            throw new IllegalStateException("No aggregations in search source for gap resolution of [" + aggregationName + "]");
+        }
+
+        // Build the include set from the term keys
+        TreeSet<BytesRef> includeValues = new TreeSet<>();
+        for (String termKey : termsToResolve) {
+            includeValues.add(new BytesRef(termKey));
+        }
+        IncludeExclude includeFilter = new IncludeExclude(null, null, includeValues, null);
+
+        SearchSourceBuilder finalSource = new SearchSourceBuilder();
+        finalSource.query(original.query());
+        finalSource.size(0);
+
+        boolean found = false;
+        for (AggregationBuilder agg : aggBuilder.getAggregatorFactories()) {
+            if (agg.getName().equals(aggregationName) && agg instanceof TermsAggregationBuilder) {
+                AggregationBuilder refined = AggregationBuilder.deepCopy(agg, copy -> {
+                    if (copy instanceof TermsAggregationBuilder terms && copy.getName().equals(aggregationName)) {
+                        // Only collect the specific gap terms
+                        terms.includeExclude(includeFilter);
+                        // min_doc_count=1: include any term with at least 1 doc
+                        terms.minDocCount(1);
+                        terms.size(Integer.MAX_VALUE);
+                        terms.shardSize(Integer.MAX_VALUE);
+                        terms.mode(TermsAggregationMode.APPROXIMATE);
+                    }
+                    return copy;
+                });
+                finalSource.aggregation(refined);
+                found = true;
+            }
+        }
+        if (found == false) {
+            throw new IllegalStateException("Terms aggregation [" + aggregationName + "] not found in search source for gap resolution");
+        }
+        return finalSource;
+    }
+
+    /**
+     * Identifies gaps in Phase 2 results: terms that were reported by some shards
+     * but not all shards. Returns a map from shard index (position in the activeResults
+     * list) to the set of term keys that shard did NOT report.
+     * <p>
+     * Only shards in {@code respondedShards} are considered for gap resolution.
+     * Shards that failed Phase 2 are excluded — sending Phase 3 requests to them
+     * would likely fail again.
+     *
+     * @param phase2Responses Per-shard Phase 2 responses, indexed by shard position
+     * @param aggregationName The name of the terms aggregation
+     * @param numShards Total number of shards that participated in Phase 2
+     * @param respondedShards Set of shard indices that successfully responded in Phase 2.
+     *                        Only these shards will be considered for Phase 3 gap resolution.
+     * @return Map from shard index to set of term keys needing gap resolution.
+     *         Empty map if no gaps exist (all terms reported by all responding shards).
+     */
+    public static Map<Integer, List<String>> identifyGaps(
+        Map<Integer, TermsRefinementShardResponse> phase2Responses,
+        String aggregationName,
+        int numShards,
+        Set<Integer> respondedShards
+    ) {
+        // Step 1: For each shard, collect the set of term keys it reported
+        Map<Integer, Set<String>> termsByShard = new HashMap<>();
+        Set<String> allTermKeys = new HashSet<>();
+
+        for (Map.Entry<Integer, TermsRefinementShardResponse> entry : phase2Responses.entrySet()) {
+            int shardIdx = entry.getKey();
+            TermsRefinementShardResponse response = entry.getValue();
             InternalAggregation termsAgg = response.aggregations().get(aggregationName);
-            if (termsAgg != null) {
-                termsToReduce.add(termsAgg);
+
+            Set<String> shardTerms = new HashSet<>();
+            if (termsAgg instanceof AbstractInternalTerms<?, ?> internalTerms) {
+                for (var bucket : internalTerms.getBuckets()) {
+                    String key = bucket.getKeyAsString();
+                    shardTerms.add(key);
+                    allTermKeys.add(key);
+                }
+            }
+            termsByShard.put(shardIdx, shardTerms);
+        }
+
+        if (allTermKeys.isEmpty()) {
+            return Map.of();
+        }
+
+        // Step 2: For each responding shard, find terms it didn't report (gaps).
+        // Skip shards that failed Phase 2 — they won't respond to Phase 3 either.
+        Map<Integer, List<String>> gapsByShard = new HashMap<>();
+        for (int shardIdx = 0; shardIdx < numShards; shardIdx++) {
+            if (respondedShards.contains(shardIdx) == false) {
+                continue; // skip failed shards
+            }
+            Set<String> shardTerms = termsByShard.getOrDefault(shardIdx, Set.of());
+            List<String> gaps = new ArrayList<>();
+            for (String termKey : allTermKeys) {
+                if (shardTerms.contains(termKey) == false) {
+                    gaps.add(termKey);
+                }
+            }
+            if (gaps.isEmpty() == false) {
+                gapsByShard.put(shardIdx, gaps);
             }
         }
 
-        if (termsToReduce.isEmpty()) {
+        return gapsByShard;
+    }
+
+    /**
+     * Properly reduces Phase 2 (and optionally Phase 3) refinement results from all shards.
+     * Each per-shard response is wrapped in its own InternalAggregations, then the standard
+     * reduce merges same-key buckets across shards to produce exact counts.
+     *
+     * @param responses List of per-shard refinement results (Phase 2 + Phase 3)
+     * @param aggregationName The name of the terms aggregation
+     * @param reduceContext The reduce context for performing the final reduction
+     * @return The properly reduced aggregation results with exact counts
+     */
+    public static InternalAggregations reduceRefinementResults(
+        List<TermsRefinementShardResponse> responses,
+        String aggregationName,
+        AggregationReduceContext reduceContext
+    ) {
+        List<InternalAggregations> perShardAggs = new ArrayList<>();
+        for (TermsRefinementShardResponse response : responses) {
+            InternalAggregation termsAgg = response.aggregations().get(aggregationName);
+            if (termsAgg != null) {
+                perShardAggs.add(InternalAggregations.from(termsAgg));
+            }
+        }
+        if (perShardAggs.isEmpty()) {
             return InternalAggregations.EMPTY;
         }
-
-        // The Phase 2 results come from all shards with threshold-filtered terms.
-        // When reduced together, they produce exact counts (docCountError = 0)
-        // because every shard reported every term above threshold T.
-        return InternalAggregations.from(termsToReduce);
+        if (perShardAggs.size() == 1) {
+            return perShardAggs.get(0);
+        }
+        return InternalAggregations.reduce(perShardAggs, reduceContext);
     }
 }

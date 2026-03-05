@@ -18,6 +18,7 @@ import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.transport.AbstractTransportRequest;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * TPUT Phase 2/3 shard request. Sent from the coordinator to each shard
@@ -35,6 +36,7 @@ public class TermsRefinementShardRequest extends AbstractTransportRequest implem
     private final ShardSearchRequest shardSearchRequest;
     private final String aggregationName;
     private final long threshold;
+    private final List<String> termsToResolve;
 
     public TermsRefinementShardRequest(
         OriginalIndices originalIndices,
@@ -43,11 +45,23 @@ public class TermsRefinementShardRequest extends AbstractTransportRequest implem
         String aggregationName,
         long threshold
     ) {
+        this(originalIndices, shardId, shardSearchRequest, aggregationName, threshold, null);
+    }
+
+    public TermsRefinementShardRequest(
+        OriginalIndices originalIndices,
+        ShardId shardId,
+        ShardSearchRequest shardSearchRequest,
+        String aggregationName,
+        long threshold,
+        List<String> termsToResolve
+    ) {
         this.originalIndices = originalIndices;
         this.shardId = shardId;
         this.shardSearchRequest = shardSearchRequest;
         this.aggregationName = aggregationName;
         this.threshold = threshold;
+        this.termsToResolve = termsToResolve;
     }
 
     public TermsRefinementShardRequest(StreamInput in) throws IOException {
@@ -57,6 +71,7 @@ public class TermsRefinementShardRequest extends AbstractTransportRequest implem
         shardSearchRequest = new ShardSearchRequest(in);
         aggregationName = in.readString();
         threshold = in.readVLong();
+        termsToResolve = in.readOptionalCollectionAsList(StreamInput::readString);
     }
 
     @Override
@@ -67,6 +82,7 @@ public class TermsRefinementShardRequest extends AbstractTransportRequest implem
         shardSearchRequest.writeTo(out);
         out.writeString(aggregationName);
         out.writeVLong(threshold);
+        out.writeOptionalCollection(termsToResolve, StreamOutput::writeString);
     }
 
     public ShardId shardId() {
@@ -87,6 +103,15 @@ public class TermsRefinementShardRequest extends AbstractTransportRequest implem
      */
     public long threshold() {
         return threshold;
+    }
+
+    /**
+     * For Phase 3 gap resolution: the specific term keys to query on this shard.
+     * When non-null, the shard should use an include filter to only collect these terms.
+     * When null, this is a Phase 2 request (collect all terms above threshold).
+     */
+    public List<String> termsToResolve() {
+        return termsToResolve;
     }
 
     @Override
