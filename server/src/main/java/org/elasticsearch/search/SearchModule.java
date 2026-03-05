@@ -136,6 +136,7 @@ import org.elasticsearch.search.aggregations.bucket.sampler.UnmappedSampler;
 import org.elasticsearch.search.aggregations.bucket.sampler.random.InternalRandomSampler;
 import org.elasticsearch.search.aggregations.bucket.sampler.random.RandomSamplerAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.sampler.random.RandomSamplingQueryBuilder;
+import org.elasticsearch.search.aggregations.bucket.terms.DeterministicTermsAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.terms.DoubleTerms;
 import org.elasticsearch.search.aggregations.bucket.terms.LongRareTerms;
 import org.elasticsearch.search.aggregations.bucket.terms.LongTerms;
@@ -541,6 +542,20 @@ public class SearchModule {
                 .addResultReader(LongTerms.NAME, LongTerms::new)
                 .addResultReader(DoubleTerms.NAME, DoubleTerms::new)
                 .setAggregatorRegistrar(TermsAggregationBuilder::registerAggregators),
+            builder
+        );
+        registerAggregation(
+            new AggregationSpec(
+                DeterministicTermsAggregationBuilder.NAME,
+                DeterministicTermsAggregationBuilder::new,
+                DeterministicTermsAggregationBuilder.PARSER
+            )
+                // Reuses the same result types as standard terms - the difference is in shard_size behavior
+                .addResultReader(StringTerms.NAME, StringTerms::new)
+                .addResultReader(UnmappedTerms.NAME, UnmappedTerms::new)
+                .addResultReader(LongTerms.NAME, LongTerms::new)
+                .addResultReader(DoubleTerms.NAME, DoubleTerms::new)
+                .setAggregatorRegistrar(DeterministicTermsAggregationBuilder::registerAggregators),
             builder
         );
         registerAggregation(
