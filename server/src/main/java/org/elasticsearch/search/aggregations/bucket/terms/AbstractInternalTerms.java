@@ -46,6 +46,16 @@ import static org.elasticsearch.search.aggregations.bucket.terms.InternalTerms.S
 public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B>, B extends AbstractInternalTerms.AbstractTermsBucket<B>>
     extends InternalMultiBucketAggregation<A, B> {
 
+    TermsAggregationMode mode = TermsAggregationMode.DEFAULT;
+
+    // Coordinator-local transient fields — set during the coordinator-side reduce
+    // (TermsAggregationReducer.get()) and consumed by TermsRefinementCoordinator.
+    // These are NEVER serialized over the wire; they only exist on the coordinator
+    // node after all shard results have been merged.
+    private boolean needsRefinement = false;
+    private long provisionalMinDocCount = -1;
+    private int numShardsInReduce = -1;
+
     public AbstractInternalTerms(String name, Map<String, Object> metadata) {
         super(name, metadata);
     }
@@ -53,6 +63,50 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
     protected AbstractInternalTerms(StreamInput in) throws IOException {
 
         super(in);
+    }
+
+    public TermsAggregationMode getMode() {
+        return mode;
+    }
+
+    public void setMode(TermsAggregationMode mode) {
+        this.mode = mode;
+    }
+
+    /**
+     * Returns true if this terms aggregation result needs TPUT refinement
+     * (Phase 2/3) to achieve exact results. Only true when mode is EXACT
+     * and the Phase 1 reduce detected error in the results.
+     */
+    public boolean needsRefinement() {
+        return needsRefinement;
+    }
+
+    public void setNeedsRefinement(boolean needsRefinement) {
+        this.needsRefinement = needsRefinement;
+    }
+
+    /**
+     * Returns τ₁ — the minimum doc_count among the provisional top-k after Phase 1 merge.
+     * Used to compute the TPUT threshold T = τ₁ / numShards.
+     */
+    public long getProvisionalMinDocCount() {
+        return provisionalMinDocCount;
+    }
+
+    public void setProvisionalMinDocCount(long provisionalMinDocCount) {
+        this.provisionalMinDocCount = provisionalMinDocCount;
+    }
+
+    /**
+     * Returns the number of shards that participated in the Phase 1 reduce.
+     */
+    public int getNumShardsInReduce() {
+        return numShardsInReduce;
+    }
+
+    public void setNumShardsInReduce(int numShardsInReduce) {
+        this.numShardsInReduce = numShardsInReduce;
     }
 
     public abstract static class AbstractTermsBucket<B extends AbstractTermsBucket<B>> extends InternalMultiBucketAggregation.InternalBucket
@@ -337,7 +391,25 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
                 // has already occurred on a data node. The doc count error should not be 0 in this case.
                 docCountError = size == 1 && reduceContext.hasBatchedResult() == false ? 0 : sumDocCountError;
             }
-            return create(name, result, reduceContext.isFinalReduce() ? getOrder() : thisReduceOrder, docCountError, otherDocCount);
+            A reduced = create(name, result, reduceContext.isFinalReduce() ? getOrder() : thisReduceOrder, docCountError, otherDocCount);
+
+            // TPUT refinement trigger: if mode is EXACT and we detected error,
+            // signal that AggregationRefinementPhase should run Phases 2/3
+            reduced.setMode(getMode());
+            if (getMode() == TermsAggregationMode.EXACT && reduceContext.isFinalReduce() && (docCountError > 0 || docCountError == -1)) {
+                reduced.setNeedsRefinement(true);
+                // Compute τ₁ = minimum doc_count among the provisional top-k
+                if (result.isEmpty() == false) {
+                    long minCount = Long.MAX_VALUE;
+                    for (B bucket : result) {
+                        minCount = Math.min(minCount, bucket.getDocCount());
+                    }
+                    reduced.setProvisionalMinDocCount(minCount);
+                }
+                reduced.setNumShardsInReduce(size);
+            }
+
+            return reduced;
         }
 
         private BucketOrder getThisReduceOrder() {

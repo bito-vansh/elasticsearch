@@ -38,6 +38,8 @@ import java.util.Objects;
 import java.util.function.ToLongFunction;
 
 public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<TermsAggregationBuilder> {
+    static final TransportVersion EXACT_TERMS_MODE = TransportVersion.fromName("terms_agg_exact_mode");
+
     public static final int KEY_ORDER_CONCURRENCY_THRESHOLD = 50;
 
     public static final String NAME = "terms";
@@ -56,6 +58,7 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
         new TermsAggregator.ConstantBucketCountThresholds(1, 0, 10, -1);
     public static final ParseField SHOW_TERM_DOC_COUNT_ERROR = new ParseField("show_term_doc_count_error");
     public static final ParseField ORDER_FIELD = new ParseField("order");
+    public static final ParseField MODE_FIELD = new ParseField("mode");
 
     public static final ObjectParser<TermsAggregationBuilder, String> PARSER = ObjectParser.fromBuilder(NAME, TermsAggregationBuilder::new);
     static {
@@ -99,6 +102,8 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
             IncludeExclude.EXCLUDE_FIELD,
             ObjectParser.ValueType.STRING_ARRAY
         );
+
+        PARSER.declareString((b, v) -> b.mode(TermsAggregationMode.parse(v)), MODE_FIELD);
     }
 
     public static void registerAggregators(ValuesSourceRegistry.Builder builder) {
@@ -113,6 +118,7 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
 
     private boolean showTermDocCountError = false;
     private boolean excludeDeletedDocs = false;
+    private TermsAggregationMode mode = TermsAggregationMode.DEFAULT;
 
     public TermsAggregationBuilder(String name) {
         super(name);
@@ -131,6 +137,8 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
         this.collectMode = clone.collectMode;
         this.bucketCountThresholds = new BucketCountThresholds(clone.bucketCountThresholds);
         this.showTermDocCountError = clone.showTermDocCountError;
+        this.excludeDeletedDocs = clone.excludeDeletedDocs;
+        this.mode = clone.mode;
     }
 
     @Override
@@ -198,6 +206,11 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
         order = InternalOrder.Streams.readOrder(in);
         showTermDocCountError = in.readBoolean();
         excludeDeletedDocs = in.readBoolean();
+        if (in.getTransportVersion().supports(EXACT_TERMS_MODE)) {
+            mode = TermsAggregationMode.readFromStream(in);
+        } else {
+            mode = TermsAggregationMode.DEFAULT;
+        }
     }
 
     @Override
@@ -214,6 +227,9 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
         order.writeTo(out);
         out.writeBoolean(showTermDocCountError);
         out.writeBoolean(excludeDeletedDocs);
+        if (out.getTransportVersion().supports(EXACT_TERMS_MODE)) {
+            mode.writeTo(out);
+        }
     }
 
     /**
@@ -407,6 +423,22 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
         return excludeDeletedDocs;
     }
 
+    /**
+     * Sets the aggregation mode. {@link TermsAggregationMode#EXACT} uses the TPUT algorithm
+     * to guarantee zero-error top-k results at the cost of additional round-trips.
+     */
+    public TermsAggregationBuilder mode(TermsAggregationMode mode) {
+        this.mode = Objects.requireNonNull(mode);
+        return this;
+    }
+
+    /**
+     * Returns the current aggregation mode.
+     */
+    public TermsAggregationMode mode() {
+        return mode;
+    }
+
     @Override
     public BucketCardinality bucketCardinality() {
         return BucketCardinality.MANY;
@@ -434,7 +466,8 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
             subFactoriesBuilder,
             metadata,
             aggregatorSupplier,
-            excludeDeletedDocs
+            excludeDeletedDocs,
+            mode
         );
     }
 
@@ -453,6 +486,9 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
         if (includeExclude != null) {
             includeExclude.toXContent(builder, params);
         }
+        if (mode != TermsAggregationMode.DEFAULT) {
+            builder.field(MODE_FIELD.getPreferredName(), mode.toString());
+        }
         return builder;
     }
 
@@ -466,7 +502,8 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
             includeExclude,
             order,
             showTermDocCountError,
-            excludeDeletedDocs
+            excludeDeletedDocs,
+            mode
         );
     }
 
@@ -482,7 +519,8 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Term
             && Objects.equals(includeExclude, other.includeExclude)
             && Objects.equals(order, other.order)
             && Objects.equals(showTermDocCountError, other.showTermDocCountError)
-            && Objects.equals(excludeDeletedDocs, other.excludeDeletedDocs);
+            && Objects.equals(excludeDeletedDocs, other.excludeDeletedDocs)
+            && Objects.equals(mode, other.mode);
     }
 
     @Override

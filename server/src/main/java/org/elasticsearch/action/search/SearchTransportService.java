@@ -93,6 +93,7 @@ public class SearchTransportService {
     public static final String FETCH_ID_ACTION_NAME = "indices:data/read/search[phase/fetch/id]";
 
     public static final String RANK_FEATURE_SHARD_ACTION_NAME = "indices:data/read/search[phase/rank/feature]";
+    public static final String TERMS_REFINEMENT_ACTION_NAME = "indices:data/read/search[phase/terms/refinement]";
 
     /**
      * The Can-Match phase. It is executed to pre-filter shards that a search request hits. It rewrites the query on
@@ -246,6 +247,25 @@ public class SearchTransportService {
             request,
             task,
             new ConnectionCountingHandler<>(listener, RankFeatureResult::new, connection)
+        );
+    }
+
+    public void sendExecuteTermsRefinement(
+        Transport.Connection connection,
+        final org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardRequest request,
+        SearchTask task,
+        final ActionListener<org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardResponse> listener
+    ) {
+        transportService.sendChildRequest(
+            connection,
+            TERMS_REFINEMENT_ACTION_NAME,
+            request,
+            task,
+            new ConnectionCountingHandler<>(
+                listener,
+                org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardResponse::new,
+                connection
+            )
         );
     }
 
@@ -537,6 +557,24 @@ public class SearchTransportService {
             RANK_FEATURE_SHARD_ACTION_NAME,
             true,
             RankFeatureResult::new,
+            namedWriteableRegistry
+        );
+
+        transportService.registerRequestHandler(
+            TERMS_REFINEMENT_ACTION_NAME,
+            EsExecutors.DIRECT_EXECUTOR_SERVICE,
+            org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardRequest::new,
+            (request, channel, task) -> searchService.executeTermsRefinement(
+                request,
+                (SearchShardTask) task,
+                new ChannelActionListener<>(channel)
+            )
+        );
+        TransportActionProxy.registerProxyAction(
+            transportService,
+            TERMS_REFINEMENT_ACTION_NAME,
+            true,
+            org.elasticsearch.search.aggregations.bucket.terms.TermsRefinementShardResponse::new,
             namedWriteableRegistry
         );
 

@@ -191,6 +191,7 @@ public abstract class TermsAggregator extends DeferableBucketAggregator {
     protected final BucketOrder order;
     protected final Set<Aggregator> aggsUsedForSorting;
     protected final SubAggCollectionMode collectMode;
+    protected TermsAggregationMode mode = TermsAggregationMode.DEFAULT;
 
     @SuppressWarnings("this-escape")
     public TermsAggregator(
@@ -269,5 +270,13 @@ public abstract class TermsAggregator extends DeferableBucketAggregator {
     @Override
     protected boolean shouldDefer(Aggregator aggregator) {
         return collectMode == SubAggCollectionMode.BREADTH_FIRST && aggsUsedForSorting.contains(aggregator) == false;
+    }
+
+    public TermsAggregationMode getMode() {
+        return mode;
+    }
+
+    public void setMode(TermsAggregationMode mode) {
+        this.mode = mode;
     }
 }

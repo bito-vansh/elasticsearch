@@ -403,7 +403,7 @@ public final class NumericTermsAggregator extends TermsAggregator {
             } else {
                 reduceOrder = order;
             }
-            return new LongTerms(
+            LongTerms result = new LongTerms(
                 name,
                 reduceOrder,
                 order,
@@ -417,11 +417,13 @@ public final class NumericTermsAggregator extends TermsAggregator {
                 Arrays.asList(topBuckets),
                 null
             );
+            result.setMode(mode);
+            return result;
         }
 
         @Override
         LongTerms buildEmptyResult() {
-            return new LongTerms(
+            LongTerms result = new LongTerms(
                 name,
                 order,
                 order,
@@ -435,6 +437,8 @@ public final class NumericTermsAggregator extends TermsAggregator {
                 emptyList(),
                 0L
             );
+            result.setMode(mode);
+            return result;
         }
     }
 
@@ -486,7 +490,7 @@ public final class NumericTermsAggregator extends TermsAggregator {
             } else {
                 reduceOrder = order;
             }
-            return new DoubleTerms(
+            DoubleTerms result = new DoubleTerms(
                 name,
                 reduceOrder,
                 order,
@@ -500,11 +504,13 @@ public final class NumericTermsAggregator extends TermsAggregator {
                 Arrays.asList(topBuckets),
                 null
             );
+            result.setMode(mode);
+            return result;
         }
 
         @Override
         DoubleTerms buildEmptyResult() {
-            return new DoubleTerms(
+            DoubleTerms result = new DoubleTerms(
                 name,
                 order,
                 order,
@@ -518,6 +524,8 @@ public final class NumericTermsAggregator extends TermsAggregator {
                 emptyList(),
                 0L
             );
+            result.setMode(mode);
+            return result;
         }
     }
 
